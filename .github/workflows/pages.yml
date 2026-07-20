@@ -30,7 +30,7 @@ jobs:
       NEXRAD_MAX_ZOOM: "8"
       NEXRAD_FRAMES: "6"
       NEXRAD_WINDOW_MIN: "60"
-      NEXRAD_CONCURRENCY: "16"
+      NEXRAD_CONCURRENCY: "32"
     steps:
       - name: Render tiles and publish to gh-pages
         run: |

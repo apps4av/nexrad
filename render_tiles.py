@@ -91,17 +91,27 @@ async def _render_one(
     y: int,
     iso: Optional[str],
     counters: dict,
-) -> None:
+) -> Tuple[int, int, bool]:
+    """Render+write one tile. Returns (x, y, keep_children).
+
+    ``keep_children`` is True when this tile's z+1 children should still be
+    rendered -- i.e. the tile has radar data, OR the fetch was incomplete (so we
+    can't safely conclude the area is empty). Only a tile that is *empty AND
+    completely fetched* prunes its subtree.
+    """
     async with sem:
-        data = await radar.render_tile(client, z, x, y, PRODUCT, iso)
-    if _is_empty(data):
+        data, complete = await radar.render_tile_ex(client, z, x, y, PRODUCT, iso)
+    empty = _is_empty(data)
+    if empty:
         counters["empty"] += 1
-        return
+        # Keep children only if the emptiness is uncertain (a fetch failed).
+        return x, y, (not complete)
     d = os.path.join(frame_dir, str(z), str(x))
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, f"{y}.png"), "wb") as f:
         f.write(data)
     counters["written"] += 1
+    return x, y, True
 
 
 async def _resolve_frames(client: httpx.AsyncClient) -> List[Optional[str]]:
@@ -126,30 +136,53 @@ async def main() -> None:
     ) as client:
         frames = await _resolve_frames(client)
         sem = asyncio.Semaphore(CONCURRENCY)
-        counters = {"written": 0, "empty": 0}
+        counters = {"written": 0, "empty": 0, "rendered": 0, "pruned": 0}
 
-        zoom_tiles = {z: _tiles_for_zoom(z) for z in range(MIN_ZOOM, MAX_ZOOM + 1)}
-        total_candidates = sum(len(t) for t in zoom_tiles.values()) * len(frames)
+        # Region mask per zoom: the tiles that geographically cover any US
+        # radar region. Quadtree pruning then further restricts each zoom to the
+        # children of parents that actually had data.
+        zoom_mask = {z: _tiles_for_zoom(z) for z in range(MIN_ZOOM, MAX_ZOOM + 1)}
+        full_candidates = sum(len(t) for t in zoom_mask.values()) * len(frames)
         print(
             f"Rendering product={PRODUCT} zooms={MIN_ZOOM}..{MAX_ZOOM} "
-            f"frames={len(frames)} candidates={total_candidates} out={OUT}"
+            f"frames={len(frames)} mask_candidates={full_candidates} out={OUT}"
         )
 
-        tasks = []
         frame_meta = []
+        chunk = CONCURRENCY * 50
         for fi, iso in enumerate(frames):
             frame_dir = os.path.join(tiles_dir, str(fi))
             frame_meta.append({"index": fi, "time": iso or "latest"})
-            for z, tiles in zoom_tiles.items():
-                for (x, y) in tiles:
-                    tasks.append(_render_one(client, sem, frame_dir, z, x, y, iso, counters))
 
-        # Run in chunks so a single gather isn't unbounded in memory.
-        chunk = CONCURRENCY * 50
-        for i in range(0, len(tasks), chunk):
-            await asyncio.gather(*tasks[i:i + chunk])
-            print(f"  progress: {min(i + chunk, len(tasks))}/{len(tasks)} "
-                  f"(written={counters['written']} empty={counters['empty']})")
+            # Parents (in the previous zoom) whose subtree should be explored.
+            keep_parents: Optional[Set[Tuple[int, int]]] = None
+            for z in range(MIN_ZOOM, MAX_ZOOM + 1):
+                mask = zoom_mask[z]
+                if keep_parents is None:
+                    candidates = mask  # top zoom: render the whole mask
+                else:
+                    candidates = {
+                        (x, y) for (x, y) in mask
+                        if (x >> 1, y >> 1) in keep_parents
+                    }
+                    counters["pruned"] += (len(mask) - len(candidates))
+
+                keep_here: Set[Tuple[int, int]] = set()
+                cand_list = list(candidates)
+                counters["rendered"] += len(cand_list)
+                for i in range(0, len(cand_list), chunk):
+                    results = await asyncio.gather(*(
+                        _render_one(client, sem, frame_dir, z, x, y, iso, counters)
+                        for (x, y) in cand_list[i:i + chunk]
+                    ))
+                    for rx, ry, keep in results:
+                        if keep:
+                            keep_here.add((rx, ry))
+                print(f"  frame {fi} z{z}: candidates={len(cand_list)} "
+                      f"kept={len(keep_here)} "
+                      f"(written={counters['written']} empty={counters['empty']} "
+                      f"pruned={counters['pruned']})")
+                keep_parents = keep_here
 
     manifest = {
         "product": PRODUCT,
@@ -170,8 +203,9 @@ async def main() -> None:
 
     elapsed = time.time() - started
     print(
-        f"Done in {elapsed:.1f}s | tiles written={counters['written']} "
-        f"skipped_empty={counters['empty']} | manifest -> {OUT}/frames.json"
+        f"Done in {elapsed:.1f}s | rendered={counters['rendered']} "
+        f"written={counters['written']} skipped_empty={counters['empty']} "
+        f"pruned_by_quadtree={counters['pruned']} | manifest -> {OUT}/frames.json"
     )
 
 

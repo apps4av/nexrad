@@ -90,6 +90,49 @@ def _regions_for_tile(z: int, x: int, y: int) -> List[config.Region]:
     return [r for r in config.REGIONS.values() if bbox_intersects(tile_ll, r.bounds)]
 
 
+async def render_tile_ex(
+    client: httpx.AsyncClient,
+    z: int,
+    x: int,
+    y: int,
+    product: str = config.DEFAULT_PRODUCT,
+    time: Optional[str] = None,
+) -> "tuple[bytes, bool]":
+    """Render a tile and report whether the render was *complete*.
+
+    Returns ``(png_bytes, complete)`` where ``complete`` is ``True`` only if
+    every overlapping region responded successfully (or no region overlaps the
+    tile at all). When ``complete`` is ``False``, at least one upstream fetch
+    failed, so a transparent result must NOT be trusted as "no radar here" --
+    callers doing quadtree pruning should keep this tile's children as
+    candidates rather than assume they're empty too.
+    """
+    regions = _regions_for_tile(z, x, y)
+    if not regions:
+        # Nothing is expected here; a transparent tile is authoritative.
+        return transparent_tile(), True
+
+    bounds_3857 = tile_bounds_3857(z, x, y)
+    results = await asyncio.gather(
+        *(_fetch_region(client, r, product, bounds_3857, time) for r in regions)
+    )
+    complete = all(img is not None for img in results)
+
+    layers = [img for img in results if img is not None]
+    if not layers:
+        return transparent_tile(), complete
+
+    base = Image.new("RGBA", (config.TILE_SIZE, config.TILE_SIZE), (0, 0, 0, 0))
+    for img in layers:
+        if img.size != (config.TILE_SIZE, config.TILE_SIZE):
+            img = img.resize((config.TILE_SIZE, config.TILE_SIZE))
+        base = Image.alpha_composite(base, img)
+
+    buf = io.BytesIO()
+    base.save(buf, format="PNG", optimize=True)
+    return buf.getvalue(), complete
+
+
 async def render_tile(
     client: httpx.AsyncClient,
     z: int,
@@ -106,28 +149,8 @@ async def render_tile(
     requested (the server snaps to the nearest available scan). Returns a
     transparent tile if nothing overlaps or all upstream requests fail.
     """
-    regions = _regions_for_tile(z, x, y)
-    if not regions:
-        return transparent_tile()
-
-    bounds_3857 = tile_bounds_3857(z, x, y)
-    results = await asyncio.gather(
-        *(_fetch_region(client, r, product, bounds_3857, time) for r in regions)
-    )
-
-    layers = [img for img in results if img is not None]
-    if not layers:
-        return transparent_tile()
-
-    base = Image.new("RGBA", (config.TILE_SIZE, config.TILE_SIZE), (0, 0, 0, 0))
-    for img in layers:
-        if img.size != (config.TILE_SIZE, config.TILE_SIZE):
-            img = img.resize((config.TILE_SIZE, config.TILE_SIZE))
-        base = Image.alpha_composite(base, img)
-
-    buf = io.BytesIO()
-    base.save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
+    data, _ = await render_tile_ex(client, z, x, y, product, time)
+    return data
 
 
 # --- Animation frame times ------------------------------------------------
