@@ -111,12 +111,17 @@
     let userOpacity = 0.85;
     let meta = null;
     let layers = [];
+    let lastGenerated = null;
     let current = 0, playing = true, timer = null;
     const FRAME_MS = 500, LAST_FRAME_MS = 1600;
 
     function buildLayers() {
+      // Tile paths are stable across renders (tiles/{frame}/...), so we
+      // cache-bust with the manifest's generated timestamp to force the browser
+      // and CDN to fetch the freshly rendered images.
+      const v = encodeURIComponent(meta.generated || Date.now());
       layers.forEach(l => map.removeLayer(l));
-      layers = meta.frames.map(f => L.tileLayer(`tiles/${f.index}/{z}/{x}/{y}.png`, {
+      layers = meta.frames.map(f => L.tileLayer(`tiles/${f.index}/{z}/{x}/{y}.png?v=${v}`, {
         tileSize: meta.tileSize || 256, zoomOffset: (meta.tileSize === 512 ? -1 : 0),
         opacity: 0, maxNativeZoom: meta.maxZoom, minNativeZoom: meta.minZoom, maxZoom: 19,
         errorTileUrl: TRANSPARENT,
@@ -147,14 +152,24 @@
     function play() { playing = true; playBtn.innerHTML = '&#10073;&#10073;'; clearTimeout(timer); step(); }
     function pause() { playing = false; playBtn.innerHTML = '&#9654;'; clearTimeout(timer); }
 
+    function setAgeStatus() {
+      const age = meta && meta.generated ? Math.round((Date.now() - new Date(meta.generated)) / 60000) : '?';
+      statusEl.textContent = `${layers.length} frames \u00b7 updated ${age} min ago`;
+    }
+
     async function load() {
+      let m;
       try {
-        meta = await (await fetch('frames.json?_=' + Date.now())).json();
+        m = await (await fetch('frames.json?_=' + Date.now(), { cache: 'no-store' })).json();
       } catch (e) { statusEl.textContent = 'frames.json not found \u2014 run the renderer'; return; }
+      // Only rebuild when a new render actually exists (avoids flicker on the
+      // periodic poll); always refresh the "updated N min ago" label.
+      if (m.generated && m.generated === lastGenerated) { meta = m; setAgeStatus(); return; }
+      meta = m;
+      lastGenerated = m.generated;
       buildLayers();
       show(layers.length - 1);
-      const age = meta.generated ? Math.round((Date.now() - new Date(meta.generated)) / 60000) : '?';
-      statusEl.textContent = `${layers.length} frames \u00b7 updated ${age} min ago`;
+      setAgeStatus();
       if (playing) play();
     }
 
