@@ -1,8 +1,9 @@
 name: Render NEXRAD tiles to Pages
 
+# Scheduling is handled externally (cron-job.org) via the workflow_dispatch
+# REST endpoint, because GitHub's built-in `schedule:` cron is heavily throttled
+# and unreliable. It runs on push and manual dispatch too.
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
   push:
     branches: [main, master]
