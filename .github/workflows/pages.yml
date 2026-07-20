@@ -1,0 +1,62 @@
+name: Render NEXRAD tiles to Pages
+
+on:
+  # Refresh on a schedule. Note: GitHub cron is best-effort and often delayed;
+  # the practical fastest cadence is ~10-15 min.
+  schedule:
+    - cron: "*/15 * * * *"
+  # Allow manual runs from the Actions tab.
+  workflow_dispatch:
+  # Render once on push so the site isn't empty before the first cron.
+  push:
+    branches: [main]
+
+# Permissions required by the official GitHub Pages deployment.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deploy at a time; cancel superseded runs.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  render-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install httpx Pillow
+
+      - name: Render tiles
+        env:
+          NEXRAD_OUT: _site
+          NEXRAD_PRODUCT: bref_qcd
+          NEXRAD_MIN_ZOOM: "0"
+          NEXRAD_MAX_ZOOM: "6"
+          NEXRAD_FRAMES: "6"
+          NEXRAD_WINDOW_MIN: "60"
+          NEXRAD_CONCURRENCY: "16"
+        run: python render_tiles.py
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
