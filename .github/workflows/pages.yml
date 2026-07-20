@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
   # Render once on push so the site isn't empty before the first cron.
   push:
-    branches: [main]
+    branches: [main, master]
 
 # Permissions required by the official GitHub Pages deployment.
 permissions:
@@ -40,6 +40,14 @@ jobs:
 
       - name: Install dependencies
         run: pip install httpx Pillow
+
+      - name: Configure Pages
+        # enablement: true tries to turn on Pages automatically (needs the
+        # pages: write permission). If org policy blocks it, enable Pages
+        # manually: Settings -> Pages -> Source: GitHub Actions.
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Render tiles
         env:
