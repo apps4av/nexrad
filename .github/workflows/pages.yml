@@ -1,17 +1,12 @@
 name: Render NEXRAD tiles to Pages
 
 on:
-  # Refresh on a schedule. Note: GitHub cron is best-effort and often delayed;
-  # the practical fastest cadence is ~10-15 min.
   schedule:
     - cron: "*/15 * * * *"
-  # Allow manual runs from the Actions tab.
   workflow_dispatch:
-  # Render on push so the site isn't empty before the first cron.
   push:
     branches: [main, master]
 
-# Allow the built-in token to push the rendered output to the gh-pages branch.
 permissions:
   contents: write
 
@@ -19,38 +14,44 @@ concurrency:
   group: pages-deploy
   cancel-in-progress: true
 
+# This workflow deliberately uses NO `uses:` actions (no actions/checkout,
+# setup-python, etc.) so it cannot be blocked by an org "Allowed actions"
+# policy. Everything is done with plain shell on the runner, which already has
+# git and python3 preinstalled.
 jobs:
   render-and-deploy:
     runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      NEXRAD_OUT: _site
+      NEXRAD_PRODUCT: bref_qcd
+      NEXRAD_MIN_ZOOM: "0"
+      NEXRAD_MAX_ZOOM: "6"
+      NEXRAD_FRAMES: "6"
+      NEXRAD_WINDOW_MIN: "60"
+      NEXRAD_CONCURRENCY: "16"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install httpx Pillow
-
-      - name: Render tiles
-        env:
-          NEXRAD_OUT: _site
-          NEXRAD_PRODUCT: bref_qcd
-          NEXRAD_MIN_ZOOM: "0"
-          NEXRAD_MAX_ZOOM: "6"
-          NEXRAD_FRAMES: "6"
-          NEXRAD_WINDOW_MIN: "60"
-          NEXRAD_CONCURRENCY: "16"
-        run: python render_tiles.py
-
-      - name: Publish to gh-pages branch
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Render tiles and publish to gh-pages
         run: |
-          set -e
-          cd _site
+          set -euo pipefail
+          REPO_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          echo "::group::Clone source"
+          git clone --depth 1 "$REPO_URL" src
+          cd src
+          echo "::endgroup::"
+
+          echo "::group::Install deps"
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet httpx Pillow
+          echo "::endgroup::"
+
+          echo "::group::Render"
+          python3 render_tiles.py
+          echo "::endgroup::"
+
+          echo "::group::Publish gh-pages"
+          cd "$NEXRAD_OUT"
           touch .nojekyll
           git init -q
           git checkout -q -b gh-pages
@@ -58,5 +59,6 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -q -m "Deploy NEXRAD tiles $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
-          echo "Pushed rendered tiles to gh-pages branch."
+          git push -f "$REPO_URL" gh-pages
+          echo "Published to gh-pages."
+          echo "::endgroup::"
