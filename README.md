@@ -144,16 +144,19 @@ Pieces (all included):
 - **`webapp/index.html`** — the map client that reads `frames.json` and the
   local `tiles/{frame}/{z}/{x}/{y}.png` (with the same animation player).
 - **`.github/workflows/pages.yml`** — a cron workflow (`*/15 * * * *`, plus
-  manual `workflow_dispatch` and on-push) that renders and deploys via the
-  official Pages actions (`upload-pages-artifact` + `deploy-pages`), so nothing
-  bloats your git history.
+  manual `workflow_dispatch` and on-push) that renders the tiles and force-pushes
+  the output to a `gh-pages` branch using the built-in `GITHUB_TOKEN`. It uses a
+  fresh single commit each run, so it never bloats history, and it avoids the
+  `github-pages` environment gate (which fails at startup if Pages isn't
+  enabled).
 
 Set it up:
 
 1. Push the repo to GitHub.
-2. **Settings → Pages → Source: GitHub Actions** (not "deploy from a branch").
-3. The workflow runs on push, then every ~15 min. Your site is at
-   `https://<you>.github.io/<repo>/`.
+2. Let the workflow run once (on push, manually via the Actions tab, or wait for
+   cron). It creates/updates the `gh-pages` branch.
+3. **Settings → Pages → Source: Deploy from a branch → `gh-pages` → `/ (root)`.**
+4. Your site is at `https://<you>.github.io/<repo>/`, refreshed every ~15 min.
 
 Render locally to preview:
 
