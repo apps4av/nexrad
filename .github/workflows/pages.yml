@@ -27,7 +27,7 @@ jobs:
       NEXRAD_OUT: _site
       NEXRAD_PRODUCT: bref_qcd
       NEXRAD_MIN_ZOOM: "0"
-      NEXRAD_MAX_ZOOM: "6"
+      NEXRAD_MAX_ZOOM: "8"
       NEXRAD_FRAMES: "6"
       NEXRAD_WINDOW_MIN: "60"
       NEXRAD_CONCURRENCY: "16"
